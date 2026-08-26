@@ -125,6 +125,6 @@ stack.
 
 <sub>Confirmed on Nobara 43, GE-Proton 11, PipeWire 1.6.8, PipeASIO 1.5.0, RS_ASIO 0.7.5, Real Tone Cable. Written to work anywhere, tested on that. Ran it somewhere else? Open an issue and tell me if it worked or exploded, both help.</sub>
 
-<sub>None of this is my discovery, I just glued it together and wrote it down. nizo's guide is the only reason this game runs on Linux at all, and he's the one who pointed me at PipeASIO when WineASIO dead-ended. rein figured out the Proton ≥ 11 thing, that RS_ASIO has to be 0.7.5, and casually mentioned pipeasio-settings exists, which I'd completely missed. M0n7y5 makes PipeASIO, mdias makes RS_ASIO. Built with AI, tested on my own machine. CC BY-SA 4.0, same as nizo's, since it stands on his work.</sub>
+<sub>None of this is my discovery, I just glued it together and wrote it down. [nizo's](https://codeberg.org/nizo) [guide](https://codeberg.org/nizo/linux-rocksmith) is the only reason this game runs on Linux at all, and he's the one who pointed me at PipeASIO when WineASIO dead-ended. [rein](https://codeberg.org/rein) told me about the Proton ≥ 11 thing, that RS_ASIO has to be 0.7.5, and casually mentioned pipeasio-settings exists, which I'd completely missed. [M0n7y5](https://github.com/M0n7y5) makes [PipeASIO](https://github.com/M0n7y5/pipeasio), [mdias](https://github.com/mdias) makes [RS_ASIO](https://github.com/mdias/rs_asio). Built with AI, tested on my own machine. CC BY-SA 4.0, same as nizo's, since it stands on his work.</sub>
 
 <sub>Smell ya later.</sub>
