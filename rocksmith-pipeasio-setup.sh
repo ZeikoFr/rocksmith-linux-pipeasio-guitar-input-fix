@@ -9,6 +9,8 @@
 #   ./rocksmith-pipeasio-setup.sh              full run
 #   ./rocksmith-pipeasio-setup.sh --reapply    just re-copy + re-register
 #                                              (after a Proton update)
+#   ./rocksmith-pipeasio-setup.sh --launch CMD reapply if stale, then exec CMD
+#                                              (for Steam launch options)
 #   PROTON=/path/to/proton/files ./rocksmith-pipeasio-setup.sh
 #
 # Steam launch options must be set by hand — printed at the end.
@@ -16,7 +18,11 @@ set -euo pipefail
 
 APPID=221680
 REAPPLY=0
-[ "${1:-}" = "--reapply" ] && REAPPLY=1
+LAUNCH=0
+case "${1:-}" in
+  --reapply) REAPPLY=1 ;;
+  --launch)  REAPPLY=1; LAUNCH=1; shift ;;
+esac
 
 say() { printf '\n>> %s\n' "$*"; }
 die() { printf '\n!! %s\n' "$*" >&2; exit 1; }
@@ -87,13 +93,17 @@ P_W32=$(find_dir "$PROTON" i386-windows)
   || die "Couldn't map Proton wine dll dirs under $PROTON"
 
 # ---------- re-apply shortcut ----------
-copy_into_proton() {
-  local S="$HOME/.local/lib/wine"
+copy_into_proton() {  # returns 1 if the Proton tree was already current
+  local S="$HOME/.local/lib/wine" changed=0 rel dst
   [ -f "$S/x86_64-unix/pipeasio32.so" ] || die "PipeASIO not installed yet — run without --reapply."
-  cp "$S/x86_64-unix/pipeasio32.so"     "$P_U64/"
-  cp "$S/x86_64-unix/pipeasio64.dll.so" "$P_U64/"
-  cp "$S/x86_64-windows/pipeasio64.dll" "$P_W64/"
-  cp "$S/i386-windows/pipeasio32.dll"   "$P_W32/"
+  for rel in "x86_64-unix/pipeasio32.so:$P_U64" \
+             "x86_64-unix/pipeasio64.dll.so:$P_U64" \
+             "x86_64-windows/pipeasio64.dll:$P_W64" \
+             "i386-windows/pipeasio32.dll:$P_W32"; do
+    dst="${rel#*:}/$(basename "${rel%%:*}")"
+    cmp -s "$S/${rel%%:*}" "$dst" || { cp "$S/${rel%%:*}" "$dst"; changed=1; }
+  done
+  [ "$changed" -eq 1 ] || return 1
   say "copied PipeASIO into the Proton tree"
 }
 
@@ -109,10 +119,15 @@ register_pipeasio() {
 }
 
 if [ "$REAPPLY" -eq 1 ]; then
-  copy_into_proton
-  register_pipeasio
-  say "re-apply done."
-  exit 0
+  # --launch must never stop the game starting, so failures here are advisory
+  if copy_into_proton; then
+    register_pipeasio
+    say "re-apply done."
+  else
+    say "Proton tree already current — nothing to do."
+  fi
+  [ "$LAUNCH" -eq 0 ] && exit 0
+  exec "$@"
 fi
 
 # ---------- dependencies ----------
@@ -176,7 +191,7 @@ cmake --install build --prefix "$HOME/.local" >/dev/null
   || die "pipeasio32.dll missing after install."
 
 cd /
-copy_into_proton
+copy_into_proton || true
 register_pipeasio
 
 # ---------- RS_ASIO (0.7.5+ required for Proton 11 / WoW64) ----------
