@@ -77,8 +77,8 @@ fi
 say "proton: $PROTON"
 
 # ---------- Proton wine dll dirs (layout varies: lib/wine vs lib64/wine) ----------
-find_dir() {  # $1 root, $2 dirname
-  find "$1"/lib "$1"/lib64 "$1"/lib32 -maxdepth 3 -type d -name "$2" -print -quit 2>/dev/null
+find_dir() {  # $1 root, $2 dirname — must be wine's own dir, not dxvk/vkd3d/d7vk/nvapi/icu
+  find "$1"/lib "$1"/lib64 "$1"/lib32 -maxdepth 3 -type d -path "*/wine/$2" -print -quit 2>/dev/null
 }
 P_U64=$(find_dir "$PROTON" x86_64-unix)
 P_W64=$(find_dir "$PROTON" x86_64-windows)
