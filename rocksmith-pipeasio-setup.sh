@@ -137,7 +137,8 @@ register_hint() {
 
 register_pipeasio() {
   local runner
-  runner=$(find_runner)
+  # set -e would abort on the empty case, leaving the hint below unreachable
+  runner=$(find_runner || true)
   if [ -z "$runner" ]; then
     printf '   !! No runner to register through — PipeASIO stays unregistered.\n'
     printf '      Install umu-launcher, then run:\n'
@@ -215,6 +216,32 @@ fi
 have_deps || die "Dependencies still missing: need cmake, gcc, git, curl, unzip,
    winegcc/winebuild (Wine SDK), libpipewire-0.3 >= 1.4.2 dev headers, and the i686 and
    x86_64 MinGW cross-compilers. Install them and rerun."
+
+# ---------- umu-launcher (optional, for registering in the prefix) ----------
+# umu-run is the only runner that reproduces Steam's own container, so it is
+# the reliable way into a Proton prefix (see register_pipeasio). Kept out of
+# have_deps and out of the transaction above on purpose: it is packaged only on
+# Arch (multilib), a missing target would take the whole install down with it,
+# and register_pipeasio still falls back to the runner's own wine without it.
+install_umu() {
+  case "$FAMILY" in
+    arch)   sudo pacman -S --needed --noconfirm umu-launcher ;;
+    fedora) sudo dnf install -y --skip-unavailable umu-launcher ;;
+    debian) sudo apt-get install -y umu-launcher ;;
+    *) return 1 ;;
+  esac
+}
+
+if ! command -v umu-run >/dev/null; then
+  say "installing umu-launcher (runner used to register in the game prefix)"
+  install_umu || true
+fi
+if ! command -v umu-run >/dev/null; then
+  printf '   !! umu-run not available — registration will fall back to Proton'\''s own\n'
+  printf '      wine, which runs outside its steamrt container and may fail.\n'
+  printf '      Arch: enable [multilib] in /etc/pacman.conf. Others: .deb, .rpm and a\n'
+  printf '      zipapp at https://github.com/Open-Wine-Components/umu-launcher/releases\n'
+fi
 
 # ---------- Wine lib root (holds the <arch>-windows import libs) ----------
 # cmake takes one root and builds both front ends out of it, so an i386-only
