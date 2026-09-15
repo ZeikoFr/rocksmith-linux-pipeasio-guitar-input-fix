@@ -17,6 +17,8 @@
 set -euo pipefail
 
 APPID=221680
+UARCH=$(uname -m)
+BUILDLOG=/tmp/pipeasio-build.log
 REAPPLY=0
 LAUNCH=0
 case "${1:-}" in
@@ -93,15 +95,22 @@ P_W32=$(find_dir "$PROTON" i386-windows)
   || die "Couldn't map Proton wine dll dirs under $PROTON"
 
 # ---------- re-apply shortcut ----------
+installed_in_local() { [ -f "$HOME/.local/lib/wine/$UARCH-unix/pipeasio32.so" ]; }
+
 copy_into_proton() {  # returns 1 if the Proton tree was already current
-  local S="$HOME/.local/lib/wine" changed=0 rel dst
-  [ -f "$S/x86_64-unix/pipeasio32.so" ] || die "PipeASIO not installed yet — run without --reapply."
-  for rel in "x86_64-unix/pipeasio32.so:$P_U64" \
-             "x86_64-unix/pipeasio64.dll.so:$P_U64" \
-             "x86_64-windows/pipeasio64.dll:$P_W64" \
+  local S="$HOME/.local/lib/wine" changed=0 rel src dst
+  # PipeASIO 1.7.0 split the 64-bit driver into a real PE plus a unixlib:
+  # pipeasio64.dll + pipeasio64.so. Older installs ship pipeasio64.dll.so
+  # instead, so copy whichever of the two is actually there.
+  for rel in "$UARCH-unix/pipeasio32.so:$P_U64" \
+             "$UARCH-unix/pipeasio64.so:$P_U64" \
+             "$UARCH-unix/pipeasio64.dll.so:$P_U64" \
+             "$UARCH-windows/pipeasio64.dll:$P_W64" \
              "i386-windows/pipeasio32.dll:$P_W32"; do
-    dst="${rel#*:}/$(basename "${rel%%:*}")"
-    cmp -s "$S/${rel%%:*}" "$dst" || { cp "$S/${rel%%:*}" "$dst"; changed=1; }
+    src="$S/${rel%%:*}"
+    [ -f "$src" ] || continue
+    dst="${rel#*:}/$(basename "$src")"
+    cmp -s "$src" "$dst" || { cp "$src" "$dst"; changed=1; }
   done
   [ "$changed" -eq 1 ] || return 1
   say "copied PipeASIO into the Proton tree"
@@ -120,7 +129,10 @@ register_pipeasio() {
 
 if [ "$REAPPLY" -eq 1 ]; then
   # --launch must never stop the game starting, so failures here are advisory
-  if copy_into_proton; then
+  if ! installed_in_local; then
+    [ "$LAUNCH" -eq 1 ] || die "PipeASIO not installed yet — run without --reapply."
+    printf '\n   !! PipeASIO is not installed — launching without re-applying.\n'
+  elif copy_into_proton; then
     register_pipeasio
     say "re-apply done."
   else
@@ -131,11 +143,16 @@ if [ "$REAPPLY" -eq 1 ]; then
 fi
 
 # ---------- dependencies ----------
+# Since PipeASIO 1.7.0 both front ends are PE modules, so the x86_64 MinGW
+# cross-compiler is needed as well, not just the i686 one. cmake wants
+# libpipewire-0.3 >= 1.4.2 and stops hard below it.
 have_deps() {
   command -v cmake >/dev/null && command -v gcc >/dev/null && command -v unzip >/dev/null \
+    && command -v git >/dev/null && command -v curl >/dev/null \
     && command -v winegcc >/dev/null && command -v winebuild >/dev/null \
-    && pkg-config --exists libpipewire-0.3 \
-    && ls /usr/bin/i686-w64-mingw32-gcc >/dev/null 2>&1
+    && pkg-config --atleast-version=1.4.2 libpipewire-0.3 \
+    && command -v i686-w64-mingw32-gcc >/dev/null \
+    && command -v x86_64-w64-mingw32-gcc >/dev/null
 }
 
 install_deps() {
@@ -145,13 +162,16 @@ install_deps() {
       [ -d /opt/wine-staging ] && wd="wine-staging-devel"
       [ -d /opt/wine-stable ]  && wd="wine-stable-devel"
       sudo dnf install -y --skip-unavailable cmake ninja-build gcc gcc-c++ pkgconf unzip \
-        pipewire-devel mingw32-gcc qt6-qtbase-devel "$wd" ;;
+        git curl pipewire-devel qt6-qtbase-devel "$wd" \
+        mingw32-gcc mingw32-gcc-c++ mingw64-gcc mingw64-gcc-c++ ;;
     arch)
       sudo pacman -S --needed --noconfirm cmake ninja gcc pkgconf unzip \
-        libpipewire mingw-w64-gcc qt6-base wine ;;
+        git curl libpipewire mingw-w64-gcc qt6-base wine ;;
     debian)
       sudo apt-get install -y cmake ninja-build gcc g++ pkg-config unzip \
-        libpipewire-0.3-dev gcc-mingw-w64-i686 qt6-base-dev wine64-tools libwine-dev ;;
+        git curl libpipewire-0.3-dev qt6-base-dev wine64-tools libwine-dev \
+        gcc-mingw-w64-i686 g++-mingw-w64-i686 \
+        gcc-mingw-w64-x86-64 g++-mingw-w64-x86-64 ;;
     *) return 1 ;;
   esac
 }
@@ -160,35 +180,59 @@ if ! have_deps; then
   say "installing build dependencies (${FAMILY:-unknown distro})"
   install_deps || true
 fi
-have_deps || die "Dependencies still missing: need cmake, gcc, unzip, winegcc/winebuild (Wine SDK),
-   libpipewire-0.3 dev headers, and an i686 MinGW cross-compiler. Install them and rerun."
+have_deps || die "Dependencies still missing: need cmake, gcc, git, curl, unzip,
+   winegcc/winebuild (Wine SDK), libpipewire-0.3 >= 1.4.2 dev headers, and the i686 and
+   x86_64 MinGW cross-compilers. Install them and rerun."
 
-# ---------- Wine lib root (for the 32-bit import libs) ----------
-WLR=""
-for c in $(find /usr/lib /usr/lib64 /usr/lib32 /opt -maxdepth 5 \
-             -path '*i386-windows/libwinecrt0.a' 2>/dev/null); do
-  WLR=$(dirname "$(dirname "$c")"); break
-done
-[ -n "$WLR" ] || die "Couldn't find i386-windows/libwinecrt0.a — install your Wine SDK's 32-bit part."
+# ---------- Wine lib root (holds the <arch>-windows import libs) ----------
+# cmake takes one root and builds both front ends out of it, so an i386-only
+# root is no good: Arch keeps a 32-bit-only tree in /usr/lib32/wine beside the
+# real one in /usr/lib/wine, and picking that one stops cmake on the missing
+# x86_64 import libraries. Prefer a root carrying both.
+WLR="" WLR32=""
+while read -r c; do
+  r=$(dirname "$(dirname "$c")")
+  [ -n "$WLR32" ] || WLR32="$r"
+  [ -f "$r/$UARCH-windows/libwinecrt0.a" ] || continue
+  WLR="$r"; break
+done < <(find /usr/lib /usr/lib64 /usr/lib32 /opt -maxdepth 5 \
+           -path '*/i386-windows/libwinecrt0.a' 2>/dev/null | sort)
+[ -n "$WLR32" ] || die "Couldn't find i386-windows/libwinecrt0.a — install your Wine SDK's 32-bit part."
+if [ -z "$WLR" ]; then
+  WLR="$WLR32"
+  printf '   !! %s has no %s-windows import libraries; cmake may refuse it.\n' "$WLR" "$UARCH"
+fi
 say "wine lib root: $WLR"
 
 # ---------- build PipeASIO ----------
 SRC=$(mktemp -d); trap 'rm -rf "$SRC"' EXIT
-say "cloning PipeASIO"
-git clone --depth 1 https://github.com/M0n7y5/pipeasio "$SRC/pipeasio" >/dev/null 2>&1
+: > "$BUILDLOG"
+say "cloning PipeASIO  (build log: $BUILDLOG)"
+git clone --depth 1 https://github.com/M0n7y5/pipeasio "$SRC/pipeasio" >>"$BUILDLOG" 2>&1 \
+  || die "git clone failed — see $BUILDLOG"
 cd "$SRC/pipeasio"
 
+# BUILD_TESTS=OFF: the test hosts and unit tests are never installed and only
+# add ways for the setup to stop on something the game does not use.
 say "building (32-bit WoW64 enabled)"
-cmake -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_WOW64_32=ON \
-      -DWINE_LIB_ROOT="$WLR" >/dev/null
-cmake --build build -j"$(nproc)" >/dev/null
-[ -f build/pipeasio32.dll ] || ls build | grep -q pipeasio32 \
-  || die "32-bit front end was not built — check the cmake output."
+cmake -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_WOW64_32=ON -DBUILD_TESTS=OFF \
+      -DWINE_LIB_ROOT="$WLR" >>"$BUILDLOG" 2>&1 \
+  || die "cmake configure failed — see $BUILDLOG"
+cmake --build build -j"$(nproc)" >>"$BUILDLOG" 2>&1 \
+  || die "cmake build failed — see $BUILDLOG"
+
+# PipeASIO lays its build tree out the way Wine does — <arch>-windows for the
+# PE front ends, <host>-unix for the unixlib — not flat in build/.
+[ -f "build/i386-windows/pipeasio32.dll" ] && [ -f "build/$UARCH-unix/pipeasio32.so" ] \
+  || die "32-bit front end was not built — see $BUILDLOG"
 
 say "installing to \$HOME/.local"
-cmake --install build --prefix "$HOME/.local" >/dev/null
-[ -f "$HOME/.local/lib/wine/i386-windows/pipeasio32.dll" ] \
-  || die "pipeasio32.dll missing after install."
+cmake --install build --prefix "$HOME/.local" >>"$BUILDLOG" 2>&1 \
+  || die "cmake install failed — see $BUILDLOG"
+for f in "i386-windows/pipeasio32.dll" "$UARCH-unix/pipeasio32.so" \
+         "$UARCH-windows/pipeasio64.dll" "$UARCH-unix/pipeasio64.so"; do
+  [ -f "$HOME/.local/lib/wine/$f" ] || die "missing after install: ~/.local/lib/wine/$f"
+done
 
 cd /
 copy_into_proton || true
