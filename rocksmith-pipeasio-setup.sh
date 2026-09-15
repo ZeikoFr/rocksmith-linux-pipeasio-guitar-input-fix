@@ -44,7 +44,10 @@ fi
 STEAMROOT=""
 for c in "$HOME/.steam/root" "$HOME/.steam/steam" "$HOME/.local/share/Steam" \
          "$HOME/.var/app/com.valvesoftware.Steam/data/Steam"; do
-  [ -f "$c/steamapps/libraryfolders.vdf" ] && { STEAMROOT=$(readlink -f "$c"); break; }
+  if [ -f "$c/steamapps/libraryfolders.vdf" ]; then
+    STEAMROOT=$(readlink -f "$c")
+    break
+  fi
 done
 [ -n "$STEAMROOT" ] || die "Steam not found."
 
@@ -54,7 +57,11 @@ LIBS+=("$STEAMROOT")
 LIB="" INSTALLDIR=""
 for l in "${LIBS[@]}"; do
   acf="$l/steamapps/appmanifest_$APPID.acf"
-  [ -f "$acf" ] && { LIB="$l"; INSTALLDIR=$(grep -oP '"installdir"\s*"\K[^"]+' "$acf"); break; }
+  if [ -f "$acf" ]; then
+    LIB="$l"
+    INSTALLDIR=$(grep -oP '"installdir"\s*"\K[^"]+' "$acf")
+    break
+  fi
 done
 [ -n "$LIB" ] || die "Rocksmith (appid $APPID) not found in any Steam library."
 
@@ -66,10 +73,21 @@ say "game:   $GAME"
 
 # ---------- Proton: prefer newest GE (Valve builds ignore PROTON_USE_WOW64) ----------
 if [ -z "${PROTON:-}" ]; then
-  mapfile -t CAND < <( { ls -d "$STEAMROOT"/compatibilitytools.d/*/files 2>/dev/null
-      for l in "${LIBS[@]}"; do
-        ls -d "$l"/steamapps/common/Proton*/files "$l"/steamapps/common/Proton*/dist 2>/dev/null
-      done; } | while read -r d; do [ -x "$d/bin/wine" ] && echo "$d"; done )
+  # Globs, not ls: an unmatched pattern stays literal and fails the -x test
+  # below, which is the filter we wanted anyway. Parsing ls breaks on spaces.
+  CAND=()
+  for d in "$STEAMROOT"/compatibilitytools.d/*/files; do
+    if [ -x "$d/bin/wine" ]; then
+      CAND+=("$d")
+    fi
+  done
+  for l in "${LIBS[@]}"; do
+    for d in "$l"/steamapps/common/Proton*/files "$l"/steamapps/common/Proton*/dist; do
+      if [ -x "$d/bin/wine" ]; then
+        CAND+=("$d")
+      fi
+    done
+  done
   [ "${#CAND[@]}" -gt 0 ] || die "No Proton found. Set PROTON=... and rerun."
   GE=$(printf '%s\n' "${CAND[@]}" | grep -i -E 'GE-Proton|Proton-GE|CachyOS' | sort -V | tail -1 || true)
   PROTON="${GE:-$(printf '%s\n' "${CAND[@]}" | sort -V | tail -1)}"
@@ -110,7 +128,10 @@ copy_into_proton() {  # returns 1 if the Proton tree was already current
     src="$S/${rel%%:*}"
     [ -f "$src" ] || continue
     dst="${rel#*:}/$(basename "$src")"
-    cmp -s "$src" "$dst" || { cp "$src" "$dst"; changed=1; }
+    if ! cmp -s "$src" "$dst"; then
+      cp "$src" "$dst"
+      changed=1
+    fi
   done
   [ "$changed" -eq 1 ] || return 1
   say "copied PipeASIO into the Proton tree"
@@ -123,9 +144,15 @@ copy_into_proton() {  # returns 1 if the Proton tree was already current
 # the prefix already, so it stands in when umu-launcher is not installed.
 find_runner() {
   local f
-  command -v umu-run >/dev/null && { echo umu-run; return; }
+  if command -v umu-run >/dev/null; then
+    echo umu-run
+    return
+  fi
   f="$HOME/.local/share/faugus-launcher/umu-run"   # Faugus bundles its own
-  [ -x "$f" ] && { echo "$f"; return; }
+  if [ -x "$f" ]; then
+    echo "$f"
+    return
+  fi
   [ -x "$PROTON/bin/wine" ] && echo "$PROTON/bin/wine"
 }
 
@@ -237,10 +264,12 @@ if ! command -v umu-run >/dev/null; then
   install_umu || true
 fi
 if ! command -v umu-run >/dev/null; then
-  printf '   !! umu-run not available — registration will fall back to Proton'\''s own\n'
-  printf '      wine, which runs outside its steamrt container and may fail.\n'
-  printf '      Arch: enable [multilib] in /etc/pacman.conf. Others: .deb, .rpm and a\n'
-  printf '      zipapp at https://github.com/Open-Wine-Components/umu-launcher/releases\n'
+  cat <<'EOM'
+   !! umu-run not available — registration will fall back to Proton's own
+      wine, which runs outside its steamrt container and may fail.
+      Arch: enable [multilib] in /etc/pacman.conf. Others: .deb, .rpm and a
+      zipapp at https://github.com/Open-Wine-Components/umu-launcher/releases
+EOM
 fi
 
 # ---------- Wine lib root (holds the <arch>-windows import libs) ----------
@@ -269,7 +298,7 @@ SRC=$(mktemp -d); trap 'rm -rf "$SRC"' EXIT
 say "cloning PipeASIO  (build log: $BUILDLOG)"
 git clone --depth 1 https://github.com/M0n7y5/pipeasio "$SRC/pipeasio" >>"$BUILDLOG" 2>&1 \
   || die "git clone failed — see $BUILDLOG"
-cd "$SRC/pipeasio"
+cd "$SRC/pipeasio" || die "cannot enter $SRC/pipeasio"
 
 # BUILD_TESTS=OFF: the test hosts and unit tests are never installed and only
 # add ways for the setup to stop on something the game does not use.
@@ -293,7 +322,7 @@ for f in "i386-windows/pipeasio32.dll" "$UARCH-unix/pipeasio32.so" \
   [ -f "$HOME/.local/lib/wine/$f" ] || die "missing after install: ~/.local/lib/wine/$f"
 done
 
-cd /
+cd / || die "cannot leave the build directory"
 copy_into_proton || true
 register_pipeasio
 
