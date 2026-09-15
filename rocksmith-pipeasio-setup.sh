@@ -116,14 +116,46 @@ copy_into_proton() {  # returns 1 if the Proton tree was already current
   say "copied PipeASIO into the Proton tree"
 }
 
+# pipeasio-register refuses a Proton prefix unless WINE names the runner: the
+# first host-wine process in such a prefix runs Wine's prefix update, which
+# rewrites the registry and system32 for the host build (pipeasio issue #22).
+# umu-run is upstream's recipe; the runner's own wine is the build that owns
+# the prefix already, so it stands in when umu-launcher is not installed.
+find_runner() {
+  local f
+  command -v umu-run >/dev/null && { echo umu-run; return; }
+  f="$HOME/.local/share/faugus-launcher/umu-run"   # Faugus bundles its own
+  [ -x "$f" ] && { echo "$f"; return; }
+  [ -x "$PROTON/bin/wine" ] && echo "$PROTON/bin/wine"
+}
+
+register_hint() {
+  printf '      WINE=umu-run PROTONPATH=%s \\\n' "$(dirname "$PROTON")"
+  printf '          GAMEID=umu-%s WINEPREFIX=%s \\\n' "$APPID" "$PFX"
+  printf '          %s\n' "$HOME/.local/bin/pipeasio-register"
+}
+
 register_pipeasio() {
-  say "registering in the game prefix (cancel any Wine Mono prompt)"
-  WINEPREFIX="$PFX" "$HOME/.local/bin/pipeasio-register" >/tmp/pipeasio-reg.log 2>&1 || true
-  WINEPREFIX="$PFX" wineserver -k >/dev/null 2>&1 || true
+  local runner
+  runner=$(find_runner)
+  if [ -z "$runner" ]; then
+    printf '   !! No runner to register through — PipeASIO stays unregistered.\n'
+    printf '      Install umu-launcher, then run:\n'
+    register_hint
+    return
+  fi
+  say "registering through $runner (cancel any Wine Mono prompt)"
+  # PROTONPATH is the runner directory, the parent of the files/ we copied into.
+  WINEPREFIX="$PFX" WINE="$runner" PROTONPATH="$(dirname "$PROTON")" \
+    GAMEID="umu-$APPID" "$HOME/.local/bin/pipeasio-register" \
+    >/tmp/pipeasio-reg.log 2>&1 || true
+  WINEPREFIX="$PFX" "$PROTON/bin/wineserver" -k >/dev/null 2>&1 || true
   if grep -q "32-bit WoW64 front end registered" /tmp/pipeasio-reg.log; then
     say "registered (64-bit + 32-bit)"
   else
-    printf '   !! 32-bit registration not confirmed. See /tmp/pipeasio-reg.log\n'
+    printf '   !! Registration not confirmed. See /tmp/pipeasio-reg.log\n'
+    printf '      Retry by hand through the runner:\n'
+    register_hint
   fi
 }
 
