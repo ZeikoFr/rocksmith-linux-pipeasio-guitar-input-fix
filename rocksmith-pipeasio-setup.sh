@@ -330,15 +330,25 @@ rm -f "$GAME/Rocksmith.ini"
 
 # ---------- PipeASIO config: detect the adapter, mono vs stereo ----------
 say "detecting guitar input"
+# A Real Tone cable names itself, so matching on the name is safe. Anything
+# else was a guess, and guessing wrong is silent: the game starts, the log is
+# clean, no signal ever arrives. Picking the first alsa_input node was exactly
+# that guess - a UCM profile splits one interface into several sources
+# (HiFi__Mic1__source, HiFi__Mic2__source, ...) and the first is not the one
+# the desktop records from. An empty input_device is documented upstream as
+# "follow the PipeWire default source", which is the one the user already
+# tested with, so leave the choice there instead of inventing one.
+CFG="$HOME/.config/pipeasio/config.ini"
 NODE=$(pw-cli ls Node 2>/dev/null \
   | grep -oP 'node\.name = "\K[^"]+' \
   | grep -i -E 'guitar|rocksmith|real.?tone' | head -1 || true)
-NIN=1
-if [ -z "$NODE" ]; then
-  NODE=$(pw-cli ls Node 2>/dev/null | grep -oP 'node\.name = "\K[^"]+' \
-    | grep -i '^alsa_input' | grep -vi -E 'webcam|hdmi' | head -1 || true)
+# A device picked by hand outlives a full rerun; only autodetection overrides it.
+if [ -z "$NODE" ] && [ -f "$CFG" ]; then
+  NODE=$(grep -oP '^\s*input_device\s*=\s*\K\S.*' "$CFG" | head -1 || true)
+  [ -n "$NODE" ] && say "keeping the input_device already in $CFG"
 fi
-case "$NODE" in *mono*) NIN=1 ;; *) [ -n "$NODE" ] && NIN=2 ;; esac
+NIN=2
+case "$NODE" in *mono*) NIN=1 ;; esac
 
 mkdir -p "$HOME/.config/pipeasio"
 cat > "$HOME/.config/pipeasio/config.ini" <<INI
@@ -353,8 +363,13 @@ INI
 if [ -n "$NODE" ]; then
   say "input device: $NODE  (inputs = $NIN)"
 else
-  printf '   !! No input device detected. Plug the cable in, then set input_device in\n'
-  printf '      ~/.config/pipeasio/config.ini (find it with: pw-cli ls Node | grep node.name)\n'
+  DEF=$(pactl get-default-source 2>/dev/null || true)
+  say "no Real Tone cable found — following the PipeWire default source"
+  printf '      currently: %s\n' "${DEF:-unknown, check with: wpctl status}"
+  printf '      If that is not the input your instrument is plugged into, set\n'
+  printf '      input_device in ~/.config/pipeasio/config.ini; it is re-read live,\n'
+  printf '      so you can fix it without leaving the game. List the candidates\n'
+  printf '      with: pw-cli ls Node | grep node.name\n'
 fi
 
 # ---------- done ----------
