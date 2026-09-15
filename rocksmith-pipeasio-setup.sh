@@ -305,7 +305,15 @@ RS_URL=$(curl -fsSL https://api.github.com/repos/mdias/rs_asio/releases/latest \
 RSTMP=$(mktemp -d)
 curl -fsSL "$RS_URL" -o "$RSTMP/rs.zip"
 unzip -oq "$RSTMP/rs.zip" -d "$RSTMP/x"
-cp -rf "$(dirname "$(find "$RSTMP/x" -name RS_ASIO.dll | head -1)")"/. "$GAME"/
+# Guarded because the failure is silent and destructive: with no match,
+# dirname "" is ".", and the cwd here is / (set above), so the unguarded
+# form copied the filesystem root into the game directory.
+RS_DLL=$(find "$RSTMP/x" -name RS_ASIO.dll | head -1)
+if [ -z "$RS_DLL" ]; then
+  rm -rf "$RSTMP"
+  die "No RS_ASIO.dll in the archive from $RS_URL — its layout changed."
+fi
+cp -rf "$(dirname "$RS_DLL")"/. "$GAME"/
 rm -rf "$RSTMP"
 
 cat > "$GAME/RS_ASIO.ini" <<'INI'
