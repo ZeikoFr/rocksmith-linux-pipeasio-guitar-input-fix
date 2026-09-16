@@ -103,7 +103,7 @@ Mine. Took me way too long.
 |---|---|---|
 | `the 64-bit unixlib is unavailable` | WoW64's off | Add `PROTON_LOG=1`, launch, `grep -m1 "Options:" ~/steam-221680.log`. No `wow64` in there → your Proton's ignoring you, switch to GE. It's there → `--reapply` |
 | Dies in a second, no window, no log | Busted launch options | Check the trailing `%` on `%command%`. Steam fails dead silent on a broken string. Fantastic. Tremendous |
-| Constant buzz, plucking does nothing | Wrong `inputs`, or it grabbed your webcam mic | `pipeasio-settings`, fix both |
+| Constant buzz, plucking does nothing | Wrong `inputs`, or it grabbed your webcam mic | Fix `inputs` and `input_device` in `~/.config/pipeasio/config.ini`, live like `buffer_size`. `pw-cli ls Node \| grep node.name` lists the candidates. PipeASIO's `pipeasio-settings` panel does the same from a GUI, but the script doesn't build it (it'd drag in Qt6 and never runs inside Proton anyway) |
 | Crackling, dropouts | Buffer's too small | `buffer_size` 256 → 512 in `~/.config/pipeasio/config.ini`. Re-reads live so you can tune it mid-song. `sample_rate` has to be 48000, no exceptions |
 | Tone won't switch mid-song, Riff Repeater's possessed | Game's just like that | Nothing. Standard operating procedure. Does it on Windows too. It's a decade old, let it live |
 
